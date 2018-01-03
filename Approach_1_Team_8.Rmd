@@ -1,0 +1,589 @@
+---
+title: "Machine Learning Project_Team 8"
+---
+## Data Exploration and transformation
+
+```{r}
+setwd("C:/Users/47599/Desktop/Machine Learning 1/Project/Project Data")
+library(data.table)
+```
+
+Read Data
+```{r}
+# Use data.table to read faster
+Train<-fread("ProjectTrainingData.csv")
+Test<-fread("ProjectTestData.csv")
+```
+Take a look at top 20 rows and they are all categorical variables except the hour
+```{r}
+head(Train,20)
+head(Test,20)
+```
+
+Split the hour into year-month-day and hour
+```{r}
+# Firstly, let us check the type of the hour
+class(Train$hour)
+typeof(Train$hour)
+# integer, so we need to change the datatype and split the string
+Train$hours<-substr(as.character(Train$hour),7,8)
+Train$days<-substr(as.character(Train$hour),1,6)
+# We can not run this because of memory issue so I am considering doing this on my smaller samples 
+```
+Check other variables, how many categories inside each variables
+```{r}
+fn<-function(x){
+  return(length(unique(x)))
+}
+sapply(Train, FUN=fn)
+```
+
+I am going to drop id because for each row, it has different id so this variable is meaningless. 
+Some variables have reasonable number of categories like 7 or 5 (less than 10), others don't. 
+I will go to check these variables.
+```{r}
+for (i in 2:length(names(Train))){
+  print(names(Train[i]))
+  tmp <- sort(table(Train[[i]]),decreasing=T)
+  cat("Number of Categories =",length(tmp),"\n")
+  p <-min(length(tmp),20)
+  tmp <- tmp[1:p]
+  print(tmp)
+  plot(1:length(tmp),tmp)
+  print("---------------")
+  scan()
+}
+```
+Its clear that for those variables with more than 10 categories, most data points can be found within 15 or less categories.
+So I am going to recode those variables with more than 10 categories into around less than 20 categories with a category of "others" for all
+of those categories are not significant.
+
+```{r}
+# Get rid of id
+Train<-Train[,-1]
+head(Train,10)
+head(Test,10)
+```
+
+Then we want to test whether all these categories exist in our test data (which might not be) before we really recode the training data
+```{r}
+TrainUnique<-lapply(Train, FUN=unique)
+TestUnique<-lapply(Test, FUN=unique)
+NewCats<-rep(list(NA),ncol(Train))
+# No "click" in test data, No "id" in training data
+# Check the overlap frequency from "C1"
+# Store all the "unknown" categories into a list of lists
+for (i in 2:ncol(Train)){
+  wh <-!(TestUnique[[i]] %in% TrainUnique[[i]])
+  cat("variable name =", names(Train)[i], "\n")
+  cat("i =", i, "Number of new cats =", sum(wh), "\n")
+  cat("Percentage Overlap in Test Data =", round(sum(!wh)/length(wh)*100,digits=2), "\n") 
+  if (sum(wh)>0){
+  NewCats[[i]]<-unlist(TestUnique[[i]][wh])} else {next}
+}
+```
+Most of the variables here will not be a big issue with only a small amount of categories not overlapping, but for device_id and device_ip,
+only half of these categories are overlapping for train and test.
+My strategy here is for those variables with more than 80 percent of overlapping, I will just code these "new" categories as others.
+For device_id and device_ip, I want to look into these two variables and then make a decision:
+```{r}
+for (i in c(11,12)){
+  print(names(Test[i]))
+  tmp <- sort(table(Test[[i]]),decreasing=T)
+  cat("Number of Categories =",length(tmp),"\n")
+  p <-min(length(tmp),20)
+  tmp <- tmp[1:p]
+  print(tmp)
+  plot(1:length(tmp),tmp)
+  print("---------------")
+  scan()
+  }
+```
+
+I want to check whether this "new" categories are in top 20 categories of each variable in test
+```{r}
+top20_c11<-sort(table(Test[[11]]),decreasing=T)[1:20]
+sum(NewCats[[11]] %in% top20_c11)
+top20_c12<-sort(table(Test[[12]]),decreasing=T)[1:20]
+sum(NewCats[[12]] %in% top20_c12)
+```
+None of these "new" categories are in top 20 categories of each variable in test data, So I decide to code all of these "new" categories as others. Now we have a clue of how we are going to clean the data, let's first build a function to recode the train and then apply this function to test since we agree on treat all the categories not in train but in test as "others"
+```{r}
+for (i in c(5,6,7,8,9,10,11,12,13,16,19,21,22,23)){
+  # Get the top 19 categories for each variable
+  tmp<-names(sort(table(Train[[i]]),decreasing=T)[1:14])
+  wh<-!(Train[[i]] %in% tmp)
+  Train[[i]][wh]<-"others"
+}
+# Then check the result
+fn<-function(x){
+  return(length(unique(x)))
+}
+sapply(Train, FUN=fn)
+```
+Doing the same thing for test
+```{r}
+# These columns automatically contain those unmatching variables so we recode those unmatching categories at the same time
+for (i in c(5,6,7,8,9,10,11,12,13,16,19,21,22,23)){
+  # Get the top 19 categories for each variable
+  tmp<-names(sort(table(Train[[i]]),decreasing=T)[1:14])
+  wh<-!(Test[[i]] %in% tmp)
+  Test[[i]][wh]<-"others"
+}
+sapply(Test, FUN=fn)
+head(Test,10)
+```
+Save the test and train file for later use
+```{r}
+write.csv(Test,"Test_Recode.csv")
+write.csv(Train,"Train_Recode.csv")
+```
+
+
+## Data Sampling
+Take 10 random sample (each with 100,000 lines) from Train data to build the model
+I am thinking 6 chunks of train data and 4 of validation right now but may change later when I have the model
+```{r}
+set.seed(123)
+train_ind<-sample(seq_len(nrow(Train)))
+# Let us first draw a sample of 1000,000 lines to see whether we can recode the "hours" variable in this sample size
+train_1m<-Train[train_ind[1:1000000],]
+head(train_1m,30)
+write.csv(train_1m,"train_1m.csv")
+```
+```{r}
+#train_1m<-read.csv("train_1m.csv")
+train_1m$hours<-substr(as.character(train_1m$hour),7,8)
+train_1m$days<-substr(as.character(train_1m$hour),1,6)
+length(unique(train_1m$hours))
+length(unique(train_1m$days))
+# I am doing a math problem here, 9*24 happens to be 216 which is the total number of categories for hours in our 30M train data
+# Then I am going to remove the original "hour" variable and recode everything except new "hours" as factor
+```
+Recode "hours" as numeric value and everything else as factors. I am doing this procedure here because it requires less time and memory to run on a smaller data. It is supposed to run on the 30m train.
+```{r}
+head(train_1m,10)
+names(train_1m)
+train_1m<-train_1m[,-2]
+train_1m[,c(1:22,24)]<-as.data.frame(lapply(train_1m[,c(1:22,24)],factor))
+train_1m$hours<-as.numeric(train_1m$hours)
+sapply(train_1m,class)
+```
+Then I split this 1M train data into 10 chuncks of 100,000
+(The reason I chose the size is I have drawn different size of samples: 2m, 1m, 500k, 100k, 50k and 100k is big enough and run the model in a reasonable time like few minutes)
+```{r}
+train_1m<-fread("train_1m.csv")
+n<-10
+nr<-nrow(train_1m)
+#Below codes runs like forever, so I just manully split the dataset
+#split(train_1m,rep(1:ceiling(nr/n), each=n, length.out=nr))
+ind<-seq(1,1100000,100000)
+for (i in 1:(length(ind)-1)){
+  write.csv(train_1m[ind[i]:ind[i+1]-1,], paste("train_",i,".csv",sep=""))
+}
+
+```
+
+
+## Run Model on the training data
+# Run a logistic model first ( because logistic normally is the fastest model)
+```{r}
+train_1<-read.csv("train_1.csv")
+names(train_1)
+# when writing data into csv, it automatically gives me a id column so I am going to remove this column
+train_1<-train_1[,-1]
+sapply(train_1,class)
+# After checking the class of each column, we found although I have changed the categorical variables to factors before, when rewriting the csv
+# the class changed again
+train_1[]<-lapply(train_1,factor)
+
+# Run a stepwise to choose the variables I want to use in logistic
+# I want to use hours for every model so I just code the range from using only hours to using all the variables
+SmallFm<-as.formula(click~hours)
+BigFm<-"click~hours"
+for (i in 3:length(names(train_1))){
+  if (i==23) next
+  BigFm<-paste(BigFm, names(train_1)[i], sep="+")
+}
+BigFm<-as.formula(BigFm)
+#save(BigFm,file="BigFm.RData")
+sc <- list(lower=SmallFm, upper=BigFm)
+lr<-glm(formula=click~hours,family = binomial, 
+    data = train_1)
+lr_step <- step(lr,scope=sc,direction="both")
+# stepwise gives 17 variable our of 23
+# Above code runs for 2 hours to 2/3 of all the models so I am looking at other feature selection methods on other models later
+
+```
+
+Check the stepwise-logistic regression result
+```{r}
+summary(lr_step)
+#click ~ hours + C21 + site_domain + app_id + app_category + site_category + 
+# C16 + app_domain + C19 + device_model + device_id + C20 + 
+# C17 + site_id + C18 + C14 + days
+step(lr_step)
+```
+
+Predict on validation data_1 (train_10)
+```{r}
+val_1<-read.csv("train_10.csv")
+# Build our best logistic regression model on train_1
+lr_step<-glm(formula=click ~ hours+ C21 + site_domain + app_id + app_category + site_category + 
+    C16 + app_domain + C19 + device_model + device_id + C20 + 
+    C17 + site_id + C18 + C14 + days,family = binomial, 
+    data = train_1)
+names(val_1)
+val_1<-val_1[,-1]
+# Convert the validation dataset to factor so it will match the traindata
+val_1[]<-lapply(val_1,factor)
+sapply(val_1,class)
+# Predict on validation data
+pred_lr_step<-predict(lr_step,newdata=val_1[,2:24],type="prob ")
+# Calculate the logloss
+ll_lrstep_val1<-logloss(PHat=pred_lr_step,YVal=val_1[,1],n=nrow(val_1))
+ll_lrstep_val1
+
+```
+
+Log-Loss Function
+```{r}
+logloss<-function(PHat,YVal,n){
+  tmp <- rep(NA,length(PHat))
+  tmp[YVal==1] <- log(PHat[YVal==1])
+  tmp[YVal==0] <- log(1-PHat[YVal==0])
+  ll<--(sum(tmp)/n)
+  return(ll)
+}
+```
+
+Add regularization (ridge/lasso) to logistics regression
+```{r}
+# select hours,C21,site_domain, app_id, app_category,site_category, C16, app_domain, C19, device_model, device_id, C20, C17, site_id, C18, C14, days based on stepwise
+library(glmnet)
+# test a set of lambda
+grid <- 10^seq(7,-2,length=50)
+names(train_1)
+XTrain<-train_1[,c(23,22,5,7,9,6,17,8,20,12,10,21,18,4,19,15,24)]
+YTrain<-train_1[,1]
+# Change factors to dummies since glmnet does not handel factor directly
+XTrain<-model.matrix(~.,data=XTrain)
+ridge <- glmnet(XTrain,YTrain,alpha=0,lambda=grid,thresh=1e-12, family="binomial")
+```
+
+choose the lambda based on log-loss on validation sample 2
+```{r}
+# Load a different validation sample to be used to choose lambda
+val_2<-read.csv("train_9.csv")
+val_2<-val_2[,-1]
+names(val_2)
+# Also change to factor
+val_2[]<-lapply(val_2,factor)
+```
+
+```{r}
+XVal<-val_2[,c(23,22,5,7,9,6,17,8,20,12,10,21,18,4,19,15,24)]
+YVal<-val_2[,1]
+XVal<-model.matrix(~.,data=XVal)
+# Predict on validation_2
+YHat <- predict(ridge,newx=XVal)
+RMSE<-apply(YHat,2,FUN=fn,as.numeric(YVal))
+plot(RMSE)
+min(RMSE)
+# Using RMSE to pick the best lambda
+RMSE[RMSE==min(RMSE)]
+# Choose the 31th lambda for ridge
+```
+Rebuild the model with the best lambda
+
+```{r}
+ridge <- glmnet(XTrain,YTrain,alpha=0,lambda=grid[31],thresh=1e-12, family="binomial")
+# test on validation 1
+XVal<-val_1[,c(23,22,5,7,9,6,17,8,20,12,10,21,18,4,19,15,24)]
+YVal<-val_1[,1]
+XVal<-model.matrix(~.,data=XVal)
+pred_ridge <- predict(ridge,newx=XVal,type="response")
+ll_ridge_val_1<-logloss(PHat=pred_ridge,YVal=val_1[,1],n=nrow(val_1))
+ll_ridge_val_1
+```
+
+The same thing for lasso
+```{r}
+lasso<- glmnet(XTrain,YTrain,alpha=1,lambda=grid,thresh=1e-12, family="binomial")
+XVal<-val_2[,c(23,22,5,7,9,6,17,8,20,12,10,21,18,4,19,15,24)]
+YVal<-val_2[,1]
+XVal<-model.matrix(~.,data=XVal)
+YHat <- predict(lasso,newx=XVal)
+fn <- function(YHat,Y) {
+  sqrt(mean((Y-YHat)^2))
+}
+RMSE<-apply(YHat,2,FUN=fn,as.numeric(YVal))
+plot(RMSE)
+min(RMSE)
+RMSE[RMSE==min(RMSE)]
+# Choose the 45th lambda to build the lasso model
+```
+Predic on Lasso and log loss for lasso
+```{r}
+lasso<- glmnet(XTrain,YTrain,alpha=1,lambda=grid[45],thresh=1e-12, family="binomial")
+XVal<-val_1[,c(23,22,5,7,9,6,17,8,20,12,10,21,18,4,19,15,24)]
+YVal<-val_1[,1]
+XVal<-model.matrix(~.,data=XVal)
+pred_lasso <- predict(lasso,newx=XVal,type="response")
+ll_lasso_val_1<-logloss(PHat=pred_lasso,YVal=val_1[,1],n=nrow(val_1))
+ll_lasso_val_1
+```
+
+## Trees
+# Classification Tree with cross-validation
+```{r}
+#train_4<-read.csv("train_4.csv")
+#train_4<-train_4[,-1]
+#names(train_4)
+#sapply(train_4, class)
+#train_4[]<-lapply(train_4,factor)
+# Build a tree on the same train dataset, train_1
+# No feature selection here as the tree will choose the variables by cross-validation
+library(rpart)
+rpc <- rpart.control(minsplit=20,maxdepth=20,cp=0)
+tree<-rpart(formula=click~.,data=train_1,method="class",control=rpc)
+printcp(tree)
+bestcp <- tree$cptable[which.min(tree$cptable[,"xerror"]),"CP"]
+# Prune the tree by selecting smallest cp
+tree <- prune(tree,cp=bestcp)
+
+
+```
+
+Predictions on the tree
+and log loss of the tree
+
+```{r}
+pred_tree<-predict(tree, newdata=val_1[,-1],type="prob")
+pred_tree<-pred_tree[,2]
+ll_tree_val1<-logloss(PHat=pred_tree,YVal=val_1[,1],n=nrow(val_1))
+ll_tree_val1
+# Below function trys to deal with the problem of predicted prob=0 or 1
+# logloss_withzero<-function(PHat,YVal,n){
+#  tmp <- rep(NA,length(PHat))
+#  minnonzero<-(min(PHat[PHat!=0]))/3
+#  if (PHat!=0 & PHat!=1){
+#  tmp[YVal==1] <- log(PHat[YVal==1])
+#  tmp[YVal==0] <- log(1-PHat[YVal==0])
+#  } else if (PHat==0){
+#  tmp[YVal==1] <-log(PHat[YVal==1]+minnonzero)
+#  tmp[YVal==0] <-log(1-PHat[YVal==0])
+#  } else {
+#  tmp[YVal==1] <-log(PHat[YVal==1])
+#  tmp[YVal==0] <-log(1-PHat[YVal==0]+minnonzero)
+#  }
+#  ll<--(sum(tmp)/n)
+#  return(ll)
+# }
+```
+
+
+## Random Forest
+```{r}
+library(randomForest)
+# Since random forest requires a lot of memory, I am taking 10 percent of the data to build this random forest model
+# No feature selection again as the random forest forced a variable split
+set.seed(12)
+ss_ind<-sample(seq_len(nrow(train_4)))
+train_10k<-train_4[ss_ind[1:10000],]
+# Also random sample 10 percent of the validation data<-10k lines
+val_10k<-val_1[ss_ind[1:5000],]
+head(train_10k,10)
+# Convert every variables to factor
+train_10k[]<-lapply(train_10k, factor)
+val_10k[]<-lapply(val_10k, factor)
+sapply(train_10k, class)
+# Build a random forest with 100 trees
+rf <- randomForest(x=train_10k[,2:24], y=train_10k[,1],data=train_10k,
+                     sampsize=ceiling(nrow(train_10k)/4),
+                     ntree=100,maxnodes=50, proximity=TRUE)
+summary(rf)
+pred_rf <- predict(rf,newdata=val_10k[,-1],type="prob")
+# New factors not present in the training data
+```
+The problem with randomforest is it requires the excatly same factor level for both train and test (which is validation here). 
+Predictions cannot be made if validation data has more or less categories than tree. The number of categories has to be the same.
+Compare the train and validation sample and decide how to handle these new factors
+(I have run this chunk several time so in the end it gives the exact same factor number )
+```{r}
+sapply(train_10k,function(x) length(unique(x)))
+sapply(val_10k, function(x) length(unique(x)))
+# new factors happen in banner_pos, site_id, site_category, C15, C16
+```
+
+I am going to substituite these new variables by the variable with highest frequency
+```{r}
+# When compare values, to make sure I am comparing the values I am converting the type from factor to character
+train_10k[]<-lapply(train_10k,as.character)
+val_10k[]<-lapply(val_10k,as.character)
+for (i in 1:ncol(train_10k)){
+  # the "new categories" in validation
+  wh<-!(unique(val_10k[[i]]) %in% unique(train_10k[[i]]))
+  tmp<-unique(val_10k[[i]])[wh]
+  wh<-which(val_10k[[i]]%in%tmp)
+  # the top 1 category for that column in train (which will be used to replace unknown categories)
+  tmp_1<-sort(unique(train_10k[[i]]),decreasing =T)[1]
+  # Replace the "unknown" categories by the top 1 category
+  val_10k[[i]][wh]<-tmp_1
+  # Convert the class back to factor for model building
+  val_10k[[i]]<-as.factor(val_10k[[i]])
+  train_10k[[i]]<-as.factor(train_10k[[i]])
+  # In case the factor levels are different, also set the factor levels to be the same as train
+  val_10k[[i]]<-factor(val_10k[[i]], levels=levels(train_10k[[i]]))
+}
+train_10k[]<-lapply(train_10k, factor)
+val_10k[]<-lapply(val_10k, factor)
+```
+
+Below test whether the factor level has been corrected
+```{r}
+#!(sapply(val_10k, function(x) levels(factor(x))) %in% sapply(train_10k, function(x) levels(factor(x))))
+#sapply(val_10k, function(x) levels(factor(x)))[[10]]
+#sapply(train_10k, function(x) levels(factor(x)))[[10]]
+#length(unique(val_10k[[10]]))
+#val_10k[[10]]<-factor(val_10k[[10]], levels=levels(train_10k[[10]]))
+```
+
+
+Rerun the model and predict
+```{r}
+rf <- randomForest(x=train_10k[,c(2:9,11:24)], y=train_10k[,1],
+                     sampsize=ceiling(nrow(train_10k)/4),
+                     ntree=100,maxnodes=50, proximity=TRUE)
+summary(rf)
+pred_rf <- predict(rf,newdata=val_10k[,c(2:9,11:24)],type="prob")
+# The prediction gives two columns, one for prediction for "0" and one for "1"
+pred_rf <-pred_rf[,2]
+```
+
+
+We still encounter the problems of having zero for log
+Below are two approaches
+```{r}
+# This function add the 1/3 of the min to the probability equal to zero
+logloss_withzero<-function(PHat,YVal,n){
+  tmp <- rep(NA,length(PHat))
+  minnonzero<-(min(PHat[PHat!=0]))/3
+  wh1<-which(PHat==0)
+  wh2<-which(PHat==1)
+  wh3<-which(PHat!=0 & PHat!=1)
+  tmp[wh3][YVal==1] <- log(PHat[wh3][YVal==1])
+  tmp[wh3][YVal==0] <- log(1-PHat[wh3][YVal==0])
+  tmp[wh1][YVal==1] <- log(PHat[wh1][YVal==1]+minnonzero)
+  tmp[wh1][YVal==0] <- log(1-PHat[wh1][YVal==0])
+  tmp[wh2][YVal==1] <- log(PHat[wh1][YVal==1])
+  tmp[wh2][YVal==0] <- log(1-PHat[wh1][YVal==0]+minnonzero)
+  ll<--(sum(tmp)/n)
+  return(ll)
+}
+# This different function add the 1/3 of the min to all of the probability
+logloss_withzero<-function(PHat,YVal,n){
+  minnonzero<-(min(PHat[PHat!=0]))/3
+  tmp <- rep(NA,length(PHat))
+  tmp[YVal==1] <- log(PHat[YVal==1]+minnonzero)
+  tmp[YVal==0] <- log(1-PHat[YVal==0]+minnonzero)
+  ll<--(sum(tmp)/n)
+  return(ll)
+}
+```
+
+Log-loss of Trees and Random Forest
+```{r}
+## Log-loss of trees
+ll_tree_val_1<-logloss(pred_tree,val_1[,1],nrow(val_1))
+ll_tree_val_1
+# Log-loss of random forest
+ll_rf_val_1<-logloss_withzero(pred_rf,val_10k[,1],nrow(val_10k))
+ll_rf_val_1
+```
+
+# Adaboost
+```{r}
+library(fastAdaboost)
+adaboost_10k<-adaboost(click~., data=train_1, 10)
+pred_ab<-predict(adaboost_10k,newdata=val_1[,c(2:24)],type="prob")
+pred_ab<-pred_ab$prob[,2]
+ll_ab_val_1<-logloss_withzero(pred_ab,val_1[,1],nrow(val_1))
+ll_ab_val_1
+```
+## Ensemble Method
+```{r}
+# save all the predictions to a dataframe and average the result
+# here we only keep 4 models because random forest was built on a different train and test on a different validation data
+ensemble<-list(lr=unlist(pred_lr_step), ab=unlist(pred_ab), tree=unlist(pred_tree), ridge=unlist(pred_ridge))
+ensemble<-as.data.frame(ensemble)
+ensemble$mean<-apply(ensemble,1,mean)
+ll_es_val_1<-logloss(ensemble$mean,val_1[,1],nrow(val_1)) 
+ll_es_val_1
+```
+
+
+## Run on test
+The smallest log-loss is 0.419 for logistic regression (by stepwise with no regularization)
+```{r}
+library(data.table)
+test<-fread("Test_Recode.csv")
+head(test,10)
+# Split the hours and days
+test$hours<-substr(as.character(test$hour),7,8)
+test$days<-substr(as.character(test$hour),1,6)
+test<-test[,-1]
+names(test)
+# Convert to factors
+test[]<-lapply(test,factor)
+pred_lr_test<-predict(lr_step,newdata=test[1:1000,4:26],type="response")
+mean(pred_lr_test)
+```
+
+Since I split the hour data only on my 100k training sample, I need to check whether these two have different factor levels on train and test
+```{r}
+sapply(train_1[,2:24],function(x) length(unique(x)))
+sapply(test[,3:25], function(x) length(unique(x)))
+```
+
+Days in train has 9 different days while days in test has 11. I am going to replace these 2 by the most frequent in train
+```{r}
+# Compare the days in train and test
+sort(unique(train_1$days))
+sort(unique(test$days))
+# replace the extra two categories by most frequent day in train
+wh<-!(unique(test$days) %in% unique(train_1$days))
+tmp<-unique(test$days)[wh]
+high<-names(sort(table(train_1[[24]]),decreasing=T)[1])
+test$days[test$days%in%tmp]<-high
+sort(unique(test$days))
+test[]<-lapply(test, factor)
+```
+
+
+Since we have 13 million for test data, its not possible to predict all the test at a single time
+So I am going to predict by chunk 
+```{r}
+chunkindex<-seq(1,nrow(test),1000000)
+# Create a list to store my prediction
+pred_test<-rep(NA,nrow(test))
+for (i in 1: (length(chunkindex)-1)){
+  pred_test[chunkindex[i]:chunkindex[i+1]-1]<-predict(lr_step, newdata=test[chunkindex[i]:chunkindex[i+1]-1,3:25], type="response")
+}
+# Prediction on the last chunk 
+pred_test[chunkindex[14]:nrow(test)]<-predict(lr_step,newdata=test[chunkindex[14]:nrow(test),3:25], type="response")
+mean(pred_test)
+
+```
+Save the prediction and replace my prediction on the submission file
+```{r}
+save(pred_test, file="pred_test.RData")
+sub<-fread("Project Data/ProjectSubmission-TeamX.csv")
+```
+Save the submission file
+```{r}
+sub[[2]]<-pred_test
+head(sub,10)
+write.csv(sub,"ProjectSubmission-Team8.csv")
+```
+

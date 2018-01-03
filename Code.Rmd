@@ -1,5 +1,5 @@
 ---
-title: "Machine Learning Project_Team 8"
+title: "Machine Learning Click Through Competition Code"
 ---
 ## Data Exploration and transformation
 
